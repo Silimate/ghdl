@@ -27,7 +27,7 @@ with Elab.Vhdl_Objtypes; use Elab.Vhdl_Objtypes;
 with Elab.Vhdl_Values.Debug;
 
 with Synth.Environment;
-with Synth.Environment.Debug;
+-- with Synth.Environment.Debug;
 
 package Synth.Vhdl_Environment is
 
@@ -62,6 +62,6 @@ package Synth.Vhdl_Environment is
       Error_Multiple_Assignments => Error_Multiple_Assignments);
 --      "+" => Vhdl.Nodes.Get_Location);
 
-   package Debug is new Env.Debug
-     (Dump_Static => Elab.Vhdl_Values.Debug.Debug_Memtyp);
+--   package Debug is new Env.Debug
+--     (Dump_Static => Elab.Vhdl_Values.Debug.Debug_Memtyp);
 end Synth.Vhdl_Environment;
