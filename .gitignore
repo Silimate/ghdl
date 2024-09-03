@@ -87,3 +87,7 @@ doc/pyGHDL/**/*.*
 
 # IntelliJ project files
 /.idea/workspace.xml
+
+# Exclude the dist directory
+!/dist/
+!/dist/**/*
