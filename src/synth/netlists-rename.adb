@@ -22,24 +22,31 @@ with Std_Names;
 with Netlists.Gates; use Netlists.Gates;
 
 package body Netlists.Rename is
-   function Is_Keyword (Name : Sname; Lang : Language_Type) return Boolean
-   is
-      use Std_Names;
-      Id : Name_Id;
+   function Is_Simple_Sname (Name : Sname) return Boolean is
    begin
       --  Only user names can clash.
-      if Get_Sname_Kind (Name) /= Sname_User then
-         return False;
-      end if;
-      --  If prefixed, it cannot clash with a reserved identifier.
-      if Get_Sname_Prefix (Name) /= No_Sname then
+      return Get_Sname_Kind (Name) = Sname_User
+        and then Get_Sname_Prefix (Name) = No_Sname;
+   end Is_Simple_Sname;
+
+   function Is_Escaped (Name : Sname; Lang : Language_Type) return Boolean
+   is
+      pragma Unreferenced (Lang);
+      use Name_Table;
+      Id : Name_Id;
+   begin
+      if not Is_Simple_Sname (Name) then
          return False;
       end if;
 
       Id := Get_Sname_Suffix (Name);
+      return Get_Name_Ptr (Id)(1) = '\';
+   end Is_Escaped;
 
-      pragma Assert (Lang = Language_Verilog);
-
+   function Is_Verilog_Keyword (Id : Name_Id) return Boolean
+   is
+      use Std_Names;
+   begin
       case Id is
          when Name_First_Verilog .. Name_Last_V2001 =>
             return True;
@@ -65,34 +72,115 @@ package body Netlists.Rename is
             --  Not a keyword
             return False;
       end case;
-   end Is_Keyword;
+   end Is_Verilog_Keyword;
 
-   function Rename_Sname (Name : Sname; Lang : Language_Type) return Sname
+   function Escape_Verilog (Id : Name_Id) return Sname
    is
       use Name_Table;
-      Id : Name_Id;
-      Res : String (1 .. 12);
-      Len : Positive;
+      Len : constant Positive := Get_Name_Length (Id);
+      Res : String (1 .. Len + 2);
+      New_Id : Name_Id;
    begin
-      if not Is_Keyword (Name, Lang) then
-         return Name;
-      end if;
-
-      Id := Get_Sname_Suffix (Name);
-      Len := Get_Name_Length (Id);
       Res (2 .. Len + 1) := Image (Id);
       Res (1) := '\';
       Res (Len + 2) := ' ';
-      Id := Get_Identifier (Res (1 .. Len + 2));
-      return New_Sname_User (Id, No_Sname);
+      New_Id := Get_Identifier (Res);
+      return New_Sname_User (New_Id, No_Sname);
+   end Escape_Verilog;
+
+   function Rename_Verilog (Name : Sname) return Sname
+   is
+      Id : Name_Id;
+   begin
+      Id := Get_Sname_Suffix (Name);
+
+      if Is_Verilog_Keyword (Id) then
+         return Escape_Verilog (Id);
+      end if;
+
+      --  TODO: for escaped identifiers, check there is no spaces
+
+      return Name;
+   end Rename_Verilog;
+
+   function Escape_Vhdl (Id : Name_Id) return Sname
+   is
+      use Name_Table;
+      Len : constant Positive := Get_Name_Length (Id);
+      Res : String (1 .. Len + 2);
+      New_Id : Name_Id;
+   begin
+      Res (2 .. Len + 1) := Image (Id);
+      Res (1) := '\';
+      Res (Len + 2) := '\';
+      New_Id := Get_Identifier (Res);
+      return New_Sname_User (New_Id, No_Sname);
+   end Escape_Vhdl;
+
+   --  Return True if ID can be a vhdl identifier.
+   function Is_Vhdl_Identifier (Id : Name_Id) return Boolean
+   is
+      S : constant String := Name_Table.Image (Id);
+      pragma Assert (S'First = 1);
+   begin
+      for I in 1 .. S'Last loop
+         case S (I) is
+            when 'a' .. 'z'
+              | 'A' .. 'Z' =>
+               null;
+            when '0' .. '9' =>
+               if I = 1 then
+                  return False;
+               end if;
+            when '_' =>
+               if I = 1 or else I = S'Last or else S (I - 1) = '_' then
+                  return False;
+               end if;
+            when others =>
+               return False;
+         end case;
+      end loop;
+      return True;
+   end Is_Vhdl_Identifier;
+
+   function Rename_Vhdl (Name : Sname) return Sname
+   is
+      Id : Name_Id;
+   begin
+      Id := Get_Sname_Suffix (Name);
+
+      if Id in Std_Names.Name_Id_Vhdl19_Reserved_Words then
+         return Escape_Vhdl (Id);
+      end if;
+
+      if not Is_Vhdl_Identifier (Id) then
+         return Escape_Vhdl (Id);
+      end if;
+
+      --  TODO: escaped identifiers
+
+      return Name;
+   end Rename_Vhdl;
+
+   function Rename_Sname (Name : Sname; Lang : Language_Type) return Sname is
+   begin
+      if not Is_Simple_Sname (Name) then
+         return Name;
+      end if;
+
+      case Lang is
+         when Language_Verilog =>
+            return Rename_Verilog (Name);
+         when Language_Vhdl =>
+            return Rename_Vhdl (Name);
+         when others =>
+            raise Internal_Error;
+      end case;
    end Rename_Sname;
 
-   procedure Rename_User_Module
-     (Ctxt : Context_Acc; M : Module; Lang : Language_Type)
+   procedure Rename_User_Module (M : Module; Lang : Language_Type)
    is
       Port : Port_Desc;
-      Inst : Instance;
-      Inst_Mod : Module;
    begin
       --  Rename inputs and outputs.
       for I in 1 .. Get_Nbr_Inputs (M) loop
@@ -106,6 +194,17 @@ package body Netlists.Rename is
          Set_Output_Desc (M, I - 1, Port);
       end loop;
 
+      --  rename module name ?
+      --  rename parameters ?
+   end Rename_User_Module;
+
+   procedure Rename_User_Instance
+     (Ctxt : Context_Acc; M : Module; Lang : Language_Type)
+   is
+      Port : Port_Desc;
+      Inst : Instance;
+      Inst_Mod : Module;
+   begin
       --  Rename some instances.
       Inst := Get_First_Instance (M);
       while Inst /= No_Instance loop
@@ -126,7 +225,7 @@ package body Netlists.Rename is
                      --  If an output is a keyword, it cannot be used to
                      --  declare a net.  Add a Nop to rename it.
                      Port := Get_Output_Desc (Sm, I - 1);
-                     if Is_Keyword (Port.Name, Lang) then
+                     if Is_Escaped (Port.Name, Lang) then
                         So := Get_Output (Inst, I - 1);
                         Insert_Nop (Ctxt, So);
                      end if;
@@ -137,20 +236,27 @@ package body Netlists.Rename is
          end case;
          Inst := Get_Next_Instance (Inst);
       end loop;
-
-      --  rename module name ?
-      --  rename parameters ?
-   end Rename_User_Module;
+   end Rename_User_Instance;
 
    procedure Rename_Module
      (Ctxt : Context_Acc; M : Module; Lang : Language_Type)
    is
       Sm : Module;
    begin
+      --  First the module declarations.
       Sm := Get_First_Sub_Module (M);
       while Sm /= No_Module loop
          if Get_Id (Sm) >= Id_User_None then
-            Rename_User_Module (Ctxt, Sm, Lang);
+            Rename_User_Module (Sm, Lang);
+         end if;
+         Sm := Get_Next_Sub_Module (Sm);
+      end loop;
+
+      --  Then the body.
+      Sm := Get_First_Sub_Module (M);
+      while Sm /= No_Module loop
+         if Get_Id (Sm) >= Id_User_None then
+            Rename_User_Instance (Ctxt, Sm, Lang);
          end if;
          Sm := Get_Next_Sub_Module (Sm);
       end loop;
